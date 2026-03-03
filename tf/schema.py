@@ -207,10 +207,29 @@ class NestedBlock:
     @abstractmethod
     def encode(self, value: Any) -> Any:
         """Encode the python representation into the tf-serializable"""
+        if value in (None, Unknown):
+            return value
+        
+        out = dict()
+
+        for attr in self.block.attributes:
+            if attr.name in value:
+                out[attr.name] = attr.type.encode(value[attr.name])
+            else:
+                out[attr.name] = attr.default if attr.default is not None else Unknown
+        
+        return out
 
     @abstractmethod
     def decode(self, value: Any) -> Any:
         """Decode the tf-serializable representation into the python representation"""
+        if value in (None, Unknown):
+            return value
+    
+        return {
+            attr.name: attr.type.decode(value[attr.name]) if value[attr.name] not in (None, Unknown) else value[attr.name]
+            for attr in self.block.attributes 
+        }   
 
     @abstractmethod
     def semantically_equal(self, a_decoded, b_decoded) -> bool:

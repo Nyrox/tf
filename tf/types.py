@@ -1,6 +1,9 @@
 import json
 from abc import abstractmethod
-from typing import Any, Protocol
+from typing import Any, Protocol, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from tf.schema import Attribute
 
 # https://github.com/zclconf/go-cty/blob/0b7ccb8423606ba894cc0e3b71375386e4d564de/cty/json.go#L104
 # https://github.com/opentofu/opentofu/blob/0d1e6cd5f0a23e9abdff8a583dce25c54c3701b3/docs/plugin-protocol/object-wire-format.md
@@ -170,6 +173,45 @@ class Set(List):
 # Object
 # Tuple
 # Dynamic?
+
+class Object(TfType):
+    attributes: list[Attribute]
+
+    def __init__(self, attributes: list[Attribute]):
+        self.attributes = attributes
+
+    def tf_type(self) -> bytes:
+        t = [f"\"{attr.name}\":{attr.type.tf_type().decode()}" for attr in self.attributes]
+
+        tft = ('["object", {' + (', '.join(t)) + '}]').encode()
+
+        # raise Exception(tft)
+        return tft
+
+    def encode(self, value: Any) -> Any:
+        """Encode the python representation into the tf-serializable"""
+        if value in (None, Unknown):
+            return value
+        
+        out = dict()
+
+        for attr in self.attributes:
+            if attr.name in value:
+                out[attr.name] = attr.type.encode(value[attr.name])
+            else:
+                out[attr.name] = attr.default if attr.default is not None else Unknown
+        
+        return out
+
+    def decode(self, value: Any) -> Any:
+        """Decode the tf-serializable representation into the python representation"""
+        if value in (None, Unknown):
+            return value
+    
+        return {
+            attr.name: attr.type.decode(value[attr.name]) if value[attr.name] not in (None, Unknown) else value[attr.name]
+            for attr in self.attributes 
+        }  
 
 
 class _Unknown:

@@ -75,9 +75,12 @@ class Attribute:
             deprecated=self.deprecated,
         )
 
+        nestedSchema = self.type.tf_nested_schema()
+
         return pb.Schema.Attribute(
             name=self.name,
-            type=self.type.tf_type(),
+            type=self.type.tf_type() if nestedSchema is None else None,
+            nested_type=nestedSchema,
             description_kind=_desc_format_map[self.description_kind or TextFormat.Markdown],
             **can_be_null,  # pyre-ignore[6]: we can actually pass in Nones here for defaults
         )

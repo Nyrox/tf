@@ -1,6 +1,7 @@
 import json
 from abc import abstractmethod
 from typing import Any, Protocol, TYPE_CHECKING
+from tf.gen import tfplugin_pb2 as pb
 
 if TYPE_CHECKING:
     from tf.schema import Attribute
@@ -34,6 +35,9 @@ class TfType(Protocol):
     def tf_type(self) -> bytes:
         """Return the TF type pattern"""
 
+    def tf_nested_schema(self) -> None | pb.Schema.Object:
+        """Return a nested schema if applicable. Falls back to using tf_type if not implemented"""
+        return None
 
 class Number(TfType):
     """
@@ -130,6 +134,18 @@ class List(TfType):
     def tf_type(self) -> bytes:
         t = self.element_type.tf_type().decode()
         return f'["list",{t}]'.encode()
+    
+    def tf_nested_schema(self):
+        nestedSchema = self.element_type.tf_nested_schema()
+
+        # regular attribute is fine
+        if nestedSchema is None:
+            return None
+        
+        return pb.Schema.Object(
+            attributes=nestedSchema.attributes,
+            nesting=pb.Schema.Object.NestingMode.LIST,
+        )
 
 
 class Set(List):
@@ -168,12 +184,6 @@ class Set(List):
         # Convert to string for comparison since all TF values can be stringified
         return sorted(map(str, a)) == sorted(map(str, b))
 
-
-# Map
-# Object
-# Tuple
-# Dynamic?
-
 class Object(TfType):
     attributes: list[Attribute]
 
@@ -185,7 +195,6 @@ class Object(TfType):
 
         tft = ('["object", {' + (', '.join(t)) + '}]').encode()
 
-        # raise Exception(tft)
         return tft
 
     def encode(self, value: Any) -> Any:
@@ -199,8 +208,17 @@ class Object(TfType):
             if attr.name in value:
                 out[attr.name] = attr.type.encode(value[attr.name])
             else:
-                out[attr.name] = attr.default if attr.default is not None else Unknown
+                if attr.default not in (Unknown, None):
+                    out[attr.name] = attr.default
+                else:
+                    out[attr.name] = None
         
+        for k, v in value.items():
+            if k in [a.name for a in self.attributes]:
+                continue
+
+            out[k] = v
+
         return out
 
     def decode(self, value: Any) -> Any:
@@ -212,6 +230,43 @@ class Object(TfType):
             attr.name: attr.type.decode(value[attr.name]) if value[attr.name] not in (None, Unknown) else value[attr.name]
             for attr in self.attributes 
         }  
+
+    def tf_nested_schema(self):
+        return pb.Schema.Object(
+            attributes=[a.to_pb() for a in self.attributes],
+            nesting=pb.Schema.Object.NestingMode.SINGLE,
+        )
+    
+class Map(TfType):
+    valueType: TfType
+
+    def __init__(self, valueType: TfType):
+        self.valueType = valueType
+
+    def tf_type(self) -> bytes:
+        t = self.valueType.tf_type().decode()
+        tft = (f'["map", {t}]').encode()
+
+        return tft
+
+    def encode(self, value: Any) -> Any:
+        """Encode the python representation into the tf-serializable"""
+        return value
+
+    def decode(self, value: Any) -> Any:
+        """Decode the tf-serializable representation into the python representation"""
+        return value
+
+    def tf_nested_schema(self):
+        nestedSchema = self.valueType.tf_nested_schema()
+
+        if nestedSchema is None:
+            return None
+        
+        return pb.Schema.Object(
+            attributes=nestedSchema.attributes,
+            nesting=pb.Schema.Object.NestingMode.MAP,
+        )
 
 
 class _Unknown:
